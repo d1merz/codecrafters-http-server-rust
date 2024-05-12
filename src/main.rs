@@ -1,6 +1,8 @@
-use std::io::{BufRead, BufReader, BufWriter, Write};
+mod server;
+
 // Uncomment this block to pass the first stage
 use std::net::{TcpListener, TcpStream};
+use crate::server::{ResponseHeader, Server};
 
 fn main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
@@ -24,15 +26,21 @@ fn main() {
 }
 
 fn handle_request(_stream: TcpStream) -> anyhow::Result<()> {
-    let stream = _stream.try_clone()?;
-    let mut reader = BufReader::new(_stream);
-    let mut writer = BufWriter::new(stream);
-    let mut header = String::new();
-    reader.read_line(&mut header)?;
+    let mut server = Server::new(_stream);
+    let header = server.read_line()?;
     let path = parse_path(header)?;
     match path.as_str() {
-        "/" => writer.write_all("HTTP/1.1 200 OK\r\n\r\n".as_bytes()).unwrap(),
-        _ => writer.write_all("HTTP/1.1 404 Not Found\r\n\r\n".as_bytes()).unwrap()
+        "/" => server.with(ResponseHeader::Status(200)).send(None)?,
+        _ => {
+            if path.starts_with("/echo") {
+                let value = &path["/echo/".len()..];
+                server.with(ResponseHeader::Status(200)).
+                    with(ResponseHeader::Type("text/plain".to_string())).
+                    with(ResponseHeader::Length(value.len() as i32)).
+                    send(Some(value.to_string()))?
+            }
+            server.with(ResponseHeader::Status(404)).send(None)?
+        }
     }
     Ok(())
 }
