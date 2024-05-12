@@ -1,46 +1,47 @@
 use std::collections::HashMap;
 use std::fmt;
-use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::net::TcpStream;
 use std::str::FromStr;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::TcpStream;
 
 pub struct Server {
-    reader: BufReader<TcpStream>,
-    writer: BufWriter<TcpStream>
+    reader: BufReader<OwnedReadHalf>,
+    writer: BufWriter<OwnedWriteHalf>
 }
 
 impl Server {
     pub fn new(_stream: TcpStream) -> Self {
-        let stream = _stream.try_clone().expect("Cannot clone a stream");
-        let reader = BufReader::new(_stream);
-        let writer = BufWriter::new(stream);
+        let (read, write) = _stream.into_split();
+        let reader = BufReader::new(read);
+        let writer = BufWriter::new(write);
         Self {reader, writer}
     }
 
-    pub fn with(&mut self, header: ResponseHeader) -> &mut Self {
-        self.writer.write_all(header.to_string().as_bytes()).expect("Cannot write to buf");
+    pub async fn with(&mut self, header: ResponseHeader) -> &mut Self {
+        self.writer.write_all(header.to_string().as_bytes()).await.expect("Cannot write a header");
         self
     }
 
-    pub fn send(&mut self, body: Option<String>) -> anyhow::Result<()> {
-        self.writer.write_all("\r\n".as_bytes())?;
+    pub async fn send(&mut self, body: Option<String>) -> anyhow::Result<()> {
+        self.writer.write_all("\r\n".as_bytes()).await?;
         if let Some(body) = body {
-            self.writer.write_all(body.as_bytes())?;
+            self.writer.write_all(body.as_bytes()).await?;
         }
-        self.writer.flush()?;
+        self.writer.flush().await?;
         Ok(())
     }
 
-    pub fn read_line(&mut self) -> anyhow::Result<String> {
+    pub async fn read_line(&mut self) -> anyhow::Result<String> {
         let mut line = String::new();
-        self.reader.read_line(&mut line)?;
+        self.reader.read_line(&mut line).await?;
         Ok(line)
     }
 
-    pub fn read_all(&mut self) -> anyhow::Result<(HashMap<RequestHeader, String>, String)> {
+    pub async fn read_all(&mut self) -> anyhow::Result<(HashMap<RequestHeader, String>, String)> {
         let mut headers= HashMap::new();
         loop {
-            if let Ok(line) = self.read_line() {
+            if let Ok(line) = self.read_line().await {
                 if line == "\r\n" { break }
                 let tokens: Vec<String> = line.split(": ").map(|s| s.to_string()).collect();
                 if let Some(value) = tokens.get(1)  {
