@@ -1,5 +1,8 @@
 mod server;
 
+use std::path::Path;
+use tokio::fs::File;
+use tokio::io::AsyncReadExt;
 // Uncomment this block to pass the first stage
 use tokio::net::{TcpListener, TcpStream};
 use crate::server::{RequestHeader, ResponseHeader, Server};
@@ -47,8 +50,24 @@ async fn handle_request(_stream: TcpStream) -> anyhow::Result<()> {
                     with(ResponseHeader::Type("text/plain".to_string())).await.
                     with(ResponseHeader::Length(value.len() as i32)).await.
                     send(Some(value.to_string())).await?
+            } else if path.starts_with("/files") {
+                let filename = &path["/files/".len()..];
+                let directory = std::env::args().nth(2).expect("Not enough args");
+                let file_path = Path::new(&directory).join(filename);
+                if let Ok(mut file) = File::open(file_path).await {
+                    let mut body = String::new();
+                    file.read_to_string(&mut body).await?;
+                    server.with(ResponseHeader::Status(200)).await.
+                        with(ResponseHeader::Type("application/octet-stream".to_string())).await.
+                        with(ResponseHeader::Length(body.len() as i32)).await.
+                        send(Some(body)).await?
+                } else {
+                    server.with(ResponseHeader::Status(404)).await.send(None).await?
+                }
             }
-            server.with(ResponseHeader::Status(404)).await.send(None).await?
+            else {
+                server.with(ResponseHeader::Status(404)).await.send(None).await?
+            }
         }
     }
     Ok(())
