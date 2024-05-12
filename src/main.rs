@@ -2,10 +2,10 @@ mod server;
 
 use std::path::Path;
 use tokio::fs::File;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 // Uncomment this block to pass the first stage
 use tokio::net::{TcpListener, TcpStream};
-use crate::server::{RequestHeader, ResponseHeader, Server};
+use crate::server::{HttpMethod, RequestHeader, ResponseHeader, Server};
 
 #[tokio::main]
 async fn main() {
@@ -28,12 +28,10 @@ async fn main() {
 
 async fn handle_request(_stream: TcpStream) -> anyhow::Result<()> {
     let mut server = Server::new(_stream);
-    let header = server.read_line().await?;
-    let path = parse_path(header)?;
+    let (method, path, headers, body) = server.read_all().await?;
     match path.as_str() {
         "/" => server.with(ResponseHeader::Status(200)).await.send(None).await?,
         "/user-agent" => {
-            let (headers, _) = server.read_all().await?;
             if let Some(value) = headers.get(&RequestHeader::Agent) {
                 server.with(ResponseHeader::Status(200)).await.
                     with(ResponseHeader::Type("text/plain".to_string())).await.
@@ -54,15 +52,27 @@ async fn handle_request(_stream: TcpStream) -> anyhow::Result<()> {
                 let filename = &path["/files/".len()..];
                 let directory = std::env::args().nth(2).expect("Not enough args");
                 let file_path = Path::new(&directory).join(filename);
-                if let Ok(mut file) = File::open(file_path).await {
-                    let mut body = String::new();
-                    file.read_to_string(&mut body).await?;
-                    server.with(ResponseHeader::Status(200)).await.
-                        with(ResponseHeader::Type("application/octet-stream".to_string())).await.
-                        with(ResponseHeader::Length(body.len() as i32)).await.
-                        send(Some(body)).await?
-                } else {
-                    server.with(ResponseHeader::Status(404)).await.send(None).await?
+                match method {
+                    HttpMethod::Get => {
+                        if let Ok(mut file) = File::open(file_path).await {
+                            let mut body = String::new();
+                            file.read_to_string(&mut body).await?;
+                            server.with(ResponseHeader::Status(200)).await.
+                                with(ResponseHeader::Type("application/octet-stream".to_string())).await.
+                                with(ResponseHeader::Length(body.len() as i32)).await.
+                                send(Some(body)).await?
+                        } else {
+                            server.with(ResponseHeader::Status(404)).await.send(None).await?
+                        }
+                    },
+                    HttpMethod::Post => {
+                        if let Ok(mut file) = File::create(file_path).await {
+                            server.with(ResponseHeader::Status(201)).await.send(None).await?;
+                            file.write_all(body.as_bytes()).await?;
+                        } else {
+                            server.with(ResponseHeader::Status(404)).await.send(None).await?
+                        }
+                    }
                 }
             }
             else {
@@ -72,13 +82,3 @@ async fn handle_request(_stream: TcpStream) -> anyhow::Result<()> {
     }
     Ok(())
 }
-
-fn parse_path(header: String) -> anyhow::Result<String> {
-    let tokens: Vec<String> = header.split(" ").map(|s| s.to_string()).collect();
-    if let Some (path) = tokens.get(1) {
-        return Ok(path.to_string())
-    } else {
-        Err(anyhow::format_err!("Invalid header format"))
-    }
-}
-

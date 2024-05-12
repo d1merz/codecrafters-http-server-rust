@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 
@@ -32,13 +32,15 @@ impl Server {
         Ok(())
     }
 
-    pub async fn read_line(&mut self) -> anyhow::Result<String> {
+    async fn read_line(&mut self) -> anyhow::Result<String> {
         let mut line = String::new();
         self.reader.read_line(&mut line).await?;
         Ok(line)
     }
 
-    pub async fn read_all(&mut self) -> anyhow::Result<(HashMap<RequestHeader, String>, String)> {
+    pub async fn read_all(&mut self) -> anyhow::Result<(HttpMethod, String, HashMap<RequestHeader, String>, String)> {
+        let header = self.read_line().await?;
+        let (method, path) = parse_header(header)?;
         let mut headers= HashMap::new();
         loop {
             if let Ok(line) = self.read_line().await {
@@ -51,8 +53,14 @@ impl Server {
                 }
             }
         }
-        let body = String::new();
-        Ok((headers, body))
+        let mut body = String::new();
+        if let Some(len) = headers.get(&RequestHeader::Length) {
+            let length: i32 = len.parse()?;
+            let mut buf = vec![0u8; length as usize];
+            self.reader.read_exact(&mut buf).await?;
+            body = String::from_utf8_lossy(&buf).to_string();
+        }
+        Ok((method, path, headers, body))
     }
 }
 
@@ -60,7 +68,8 @@ impl Server {
 pub enum RequestHeader {
     Host,
     Agent,
-    Accept
+    Accept,
+    Length
 }
 
 impl FromStr for RequestHeader {
@@ -72,6 +81,7 @@ impl FromStr for RequestHeader {
             "Host" => Ok(Self::Host),
             "User-Agent" => Ok(Self::Agent),
             "Accept" => Ok(Self::Accept),
+            "Content-Length" => Ok(Self::Length),
             _ => Err("Неверный формат строки".to_string()),
         }
     }
@@ -91,6 +101,7 @@ impl fmt::Display for ResponseHeader {
         match self {
             Self::Status(code) => {
                 match code {
+                    201 => write!(f, "HTTP/1.1 {code} Created\r\n"),
                     200..=299 => write!(f, "HTTP/1.1 {code} OK\r\n"),
                     400..=499 => write!(f, "HTTP/1.1 {code} Not Found\r\n"),
                     _ => {Ok(())}
@@ -99,5 +110,33 @@ impl fmt::Display for ResponseHeader {
             Self::Type(content_type) => write!(f, "Content-Type: {content_type}\r\n"),
             Self::Length(len) => write!(f, "Content-Length: {len}\r\n")
         }
+    }
+}
+
+pub enum HttpMethod {
+    Get,
+    Post
+}
+
+impl FromStr for HttpMethod {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Логика для преобразования строки в значение перечисления
+        match s {
+            "GET" => Ok(Self::Get),
+            "POST" => Ok(Self::Post),
+            _ => Err("Неверный формат строки".to_string()),
+        }
+    }
+}
+
+fn parse_header(header: String) -> anyhow::Result<(HttpMethod, String)> {
+    let tokens: Vec<String> = header.split(" ").map(|s| s.to_string()).collect();
+    if let Some(path) = tokens.get(1) {
+        let method = HttpMethod::from_str(tokens.get(0).unwrap()).unwrap();
+        Ok((method, path.to_string()))
+    } else {
+        Err(anyhow::format_err!("Invalid header format"))
     }
 }
