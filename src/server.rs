@@ -1,6 +1,8 @@
+use std::collections::HashMap;
 use std::fmt;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::net::TcpStream;
+use std::str::FromStr;
 
 pub struct Server {
     reader: BufReader<TcpStream>,
@@ -29,12 +31,52 @@ impl Server {
         Ok(())
     }
 
-    pub fn read_line (&mut self) -> anyhow::Result<String> {
+    pub fn read_line(&mut self) -> anyhow::Result<String> {
         let mut line = String::new();
         self.reader.read_line(&mut line)?;
         Ok(line)
     }
+
+    pub fn read_all(&mut self) -> anyhow::Result<(HashMap<RequestHeader, String>, String)> {
+        let mut headers= HashMap::new();
+        loop {
+            if let Ok(line) = self.read_line() {
+                if line == "\r\n" { break }
+                let tokens: Vec<String> = line.split(": ").map(|s| s.to_string()).collect();
+                if let Some(value) = tokens.get(1)  {
+                    if let Ok(header) = RequestHeader::from_str(tokens.get(0).unwrap()) {
+                        headers.insert(header, value.trim().to_string());
+                    }
+                }
+            }
+        }
+        let body = String::new();
+        Ok((headers, body))
+    }
 }
+
+#[derive(Eq, PartialEq, Hash)]
+pub enum RequestHeader {
+    Host,
+    Agent,
+    Accept
+}
+
+impl FromStr for RequestHeader {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Логика для преобразования строки в значение перечисления
+        match s {
+            "Host" => Ok(Self::Host),
+            "User-Agent" => Ok(Self::Agent),
+            "Accept" => Ok(Self::Accept),
+            _ => Err("Неверный формат строки".to_string()),
+        }
+    }
+}
+
+
 
 pub enum ResponseHeader {
     Status(i32),

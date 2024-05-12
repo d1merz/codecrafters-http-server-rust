@@ -2,7 +2,7 @@ mod server;
 
 // Uncomment this block to pass the first stage
 use std::net::{TcpListener, TcpStream};
-use crate::server::{ResponseHeader, Server};
+use crate::server::{RequestHeader, ResponseHeader, Server};
 
 fn main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
@@ -31,6 +31,17 @@ fn handle_request(_stream: TcpStream) -> anyhow::Result<()> {
     let path = parse_path(header)?;
     match path.as_str() {
         "/" => server.with(ResponseHeader::Status(200)).send(None)?,
+        "/user-agent" => {
+            let (headers, _) = server.read_all()?;
+            if let Some(value) = headers.get(&RequestHeader::Agent) {
+                server.with(ResponseHeader::Status(200)).
+                    with(ResponseHeader::Type("text/plain".to_string())).
+                    with(ResponseHeader::Length(value.len() as i32)).
+                    send(Some(value.to_string()))?
+            } else {
+                return Err(anyhow::format_err!("Cannot parse a user/agent"));
+            }
+        }
         _ => {
             if path.starts_with("/echo") {
                 let value = &path["/echo/".len()..];
